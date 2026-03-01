@@ -138,9 +138,9 @@ export default function App() {
     try {
       const ideas = await mixNotes(sources, instruction, playbooks);
       setResults(ideas);
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      alert("Ocorreu um erro ao misturar as ideias. Tente novamente.");
+      alert(error.message || "Ocorreu um erro ao misturar as ideias. Tente novamente.");
     } finally {
       setIsMixing(false);
     }

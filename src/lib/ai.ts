@@ -44,7 +44,7 @@ export interface ExtractedConcept {
 }
 
 function prepareSourcesText(sources: SourceFile[]): string {
-  const MAX_TOTAL_CHARS = 100000; // Safe limit for context window
+  const MAX_TOTAL_CHARS = 60000; // Reduced to ensure safety with multiple inputs (sources + playbooks)
   const maxCharsPerSource = sources.length > 0 ? Math.floor(MAX_TOTAL_CHARS / sources.length) : MAX_TOTAL_CHARS;
   
   let text = "";
@@ -76,6 +76,11 @@ function prepareSourcesText(sources: SourceFile[]): string {
 }
 
 export async function mixNotes(sources: SourceFile[], instruction: string, playbooks: SourceFile[] = []): Promise<Idea[]> {
+  const apiKey = getApiKey();
+  if (!apiKey || apiKey === "YOUR_GROQ_API_KEY") {
+    throw new Error("A chave da API Groq não está configurada. Verifique suas variáveis de ambiente (VITE_GROQ).");
+  }
+
   const sourcesText = prepareSourcesText(sources);
   const playbooksText = prepareSourcesText(playbooks);
 
@@ -133,8 +138,19 @@ export async function mixNotes(sources: SourceFile[], instruction: string, playb
       response_format: { type: "json_object" },
     });
 
-    const jsonStr = chatCompletion.choices[0]?.message?.content || '{"ideas":[]}';
-    const parsed = JSON.parse(jsonStr);
+    const content = chatCompletion.choices[0]?.message?.content || '{"ideas":[]}';
+    
+    // Clean up potential markdown formatting
+    const jsonStr = content.replace(/```json\n?|```/g, "").trim();
+    
+    let parsed;
+    try {
+      parsed = JSON.parse(jsonStr);
+    } catch (e) {
+      console.error("Failed to parse JSON:", jsonStr);
+      throw new Error("Invalid JSON response from AI");
+    }
+    
     return parsed.ideas as Idea[];
   } catch (e) {
     console.error("Error in mixNotes:", e);
@@ -181,8 +197,19 @@ export async function extractConcepts(source: SourceFile): Promise<ExtractedConc
       response_format: { type: "json_object" },
     });
 
-    const jsonStr = chatCompletion.choices[0]?.message?.content || '{"concepts":[]}';
-    const parsed = JSON.parse(jsonStr);
+    const content = chatCompletion.choices[0]?.message?.content || '{"concepts":[]}';
+    
+    // Clean up potential markdown formatting
+    const jsonStr = content.replace(/```json\n?|```/g, "").trim();
+    
+    let parsed;
+    try {
+      parsed = JSON.parse(jsonStr);
+    } catch (e) {
+      console.error("Failed to parse JSON in extractConcepts:", jsonStr);
+      throw new Error("Invalid JSON response from AI");
+    }
+
     return parsed.concepts as ExtractedConcept[];
   } catch (e) {
     console.error("Error in extractConcepts:", e);
@@ -230,8 +257,17 @@ export async function expandIdea(idea: Idea, additionalSources: SourceFile[], in
       response_format: { type: "json_object" },
     });
 
-    const jsonStr = chatCompletion.choices[0]?.message?.content || '{}';
-    return JSON.parse(jsonStr) as Idea;
+    const content = chatCompletion.choices[0]?.message?.content || '{}';
+    
+    // Clean up potential markdown formatting
+    const jsonStr = content.replace(/```json\n?|```/g, "").trim();
+    
+    try {
+      return JSON.parse(jsonStr) as Idea;
+    } catch (e) {
+      console.error("Failed to parse JSON in expandIdea:", jsonStr);
+      throw new Error("Invalid JSON response from AI");
+    }
   } catch (e) {
     console.error("Error in expandIdea:", e);
     throw e;
@@ -295,8 +331,19 @@ export async function predictIdea(idea: Idea): Promise<IdeaPrediction[]> {
       response_format: { type: "json_object" },
     });
 
-    const jsonStr = chatCompletion.choices[0]?.message?.content || '{"predictions":[]}';
-    const parsed = JSON.parse(jsonStr);
+    const content = chatCompletion.choices[0]?.message?.content || '{"predictions":[]}';
+    
+    // Clean up potential markdown formatting
+    const jsonStr = content.replace(/```json\n?|```/g, "").trim();
+    
+    let parsed;
+    try {
+      parsed = JSON.parse(jsonStr);
+    } catch (e) {
+      console.error("Failed to parse JSON in predictIdea:", jsonStr);
+      throw new Error("Invalid JSON response from AI");
+    }
+
     return parsed.predictions as IdeaPrediction[];
   } catch (e) {
     console.error("Error in predictIdea:", e);
