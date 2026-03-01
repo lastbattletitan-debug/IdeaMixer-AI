@@ -44,22 +44,33 @@ export interface ExtractedConcept {
 }
 
 function prepareSourcesText(sources: SourceFile[]): string {
+  const MAX_TOTAL_CHARS = 100000; // Safe limit for context window
+  const maxCharsPerSource = sources.length > 0 ? Math.floor(MAX_TOTAL_CHARS / sources.length) : MAX_TOTAL_CHARS;
+  
   let text = "";
   for (const source of sources) {
+    let sourceContent = "";
     if (source.type === "file") {
       if (source.mimeType.startsWith("text/") || source.mimeType === "application/json") {
         try {
           const decoded = decodeURIComponent(escape(atob(source.data)));
-          text += `\n\n--- Fonte: ${source.name} ---\n${decoded}\n`;
+          sourceContent = decoded;
         } catch (e) {
-          text += `\n\n--- Fonte: ${source.name} ---\n[Erro ao decodificar texto]\n`;
+          sourceContent = "[Erro ao decodificar texto]";
         }
       } else {
-        text += `\n\n--- Fonte: ${source.name} ---\n[Arquivo ${source.mimeType} - O modelo atual suporta apenas texto. Considere extrair o texto deste arquivo.]\n`;
+        sourceContent = `[Arquivo ${source.mimeType} - O modelo atual suporta apenas texto. Considere extrair o texto deste arquivo.]`;
       }
     } else if (source.type === "link") {
-      text += `\n\n--- Link: ${source.name} ---\n${source.data}\n`;
+      sourceContent = source.data;
     }
+
+    // Truncate if necessary
+    if (sourceContent.length > maxCharsPerSource) {
+      sourceContent = sourceContent.substring(0, maxCharsPerSource) + "\n...[conteúdo truncado]...";
+    }
+
+    text += `\n\n--- Fonte: ${source.name} ---\n${sourceContent}\n`;
   }
   return text;
 }
