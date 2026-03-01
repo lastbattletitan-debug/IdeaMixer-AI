@@ -5,7 +5,7 @@ import { SourceFile } from "../components/FileUploader";
 
 const getApiKey = () => {
   try {
-    return import.meta.env.VITE_GROQ_API_KEY;
+    return import.meta.env.VITE_GROQ;
   } catch (e) {
     return "YOUR_GROQ_API_KEY";
   }
