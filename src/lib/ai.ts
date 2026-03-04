@@ -43,9 +43,8 @@ export interface ExtractedConcept {
   usageExamples?: string[];
 }
 
-function prepareSourcesText(sources: SourceFile[]): string {
-  const MAX_TOTAL_CHARS = 60000; // Reduced to ensure safety with multiple inputs (sources + playbooks)
-  const maxCharsPerSource = sources.length > 0 ? Math.floor(MAX_TOTAL_CHARS / sources.length) : MAX_TOTAL_CHARS;
+function prepareSourcesText(sources: SourceFile[], maxTotalChars: number = 30000): string {
+  const maxCharsPerSource = sources.length > 0 ? Math.floor(maxTotalChars / sources.length) : maxTotalChars;
   
   let text = "";
   for (const source of sources) {
@@ -81,8 +80,14 @@ export async function mixNotes(sources: SourceFile[], instruction: string, playb
     throw new Error("A chave da API Groq não está configurada. Verifique suas variáveis de ambiente (VITE_GROQ).");
   }
 
-  const sourcesText = prepareSourcesText(sources);
-  const playbooksText = prepareSourcesText(playbooks);
+  // Calculate dynamic limits to stay within token limits (approx 12k TPM)
+  // We aim for ~30k chars total for context to be safe (~7.5k tokens)
+  const TOTAL_CONTEXT_CHARS = 30000;
+  const playbooksChars = playbooks.length > 0 ? Math.min(10000, Math.floor(TOTAL_CONTEXT_CHARS * 0.3)) : 0;
+  const sourcesChars = TOTAL_CONTEXT_CHARS - playbooksChars;
+
+  const sourcesText = prepareSourcesText(sources, sourcesChars);
+  const playbooksText = prepareSourcesText(playbooks, playbooksChars);
 
   let prompt = `
     Você é um assistente de brainstorming de classe mundial e um gênio criativo.
@@ -108,7 +113,7 @@ export async function mixNotes(sources: SourceFile[], instruction: string, playb
 
   prompt += `
     
-    Gere de 3 a 5 ideias distintas. Para cada ideia, você DEVE combinar elementos de 2 ou mais fontes diferentes (varie a quantidade, às vezes combine 2, às vezes todas).
+    Gere de 5 a 10 ideias distintas. Para cada ideia, você DEVE combinar elementos de 2 ou mais fontes diferentes (varie a quantidade, às vezes combine 2, às vezes todas).
     ${playbooks.length > 0 ? "Certifique-se de que cada ideia esteja alinhada com os Playbooks fornecidos." : ""}
     
     Retorne APENAS um objeto JSON com a seguinte estrutura exata:
