@@ -1,20 +1,26 @@
 /// <reference types="vite/client" />
 
-import Groq from "groq-sdk";
+import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { SourceFile } from "../components/FileUploader";
 
+// Initialize Gemini API
+// Note: In a real production app, you should use a backend proxy to hide the API key.
+// For this demo/preview, we use the environment variable directly.
 const getApiKey = () => {
   try {
-    return import.meta.env.VITE_GROQ;
+    // Prefer the standard process.env variable if available (e.g. in container)
+    if (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEY) {
+      return process.env.GEMINI_API_KEY;
+    }
+    // Fallback to Vite env var
+    return import.meta.env.VITE_GEMINI_API_KEY;
   } catch (e) {
-    return "YOUR_GROQ_API_KEY";
+    return "";
   }
 };
 
-const groq = new Groq({
-  apiKey: getApiKey() || "YOUR_GROQ_API_KEY",
-  dangerouslyAllowBrowser: true
-});
+const apiKey = getApiKey();
+const ai = new GoogleGenAI({ apiKey: apiKey || "YOUR_GEMINI_API_KEY" });
 
 export interface IdeaPrediction {
   scenarioType: "otimista" | "pessimista" | "realista";
@@ -75,13 +81,11 @@ function prepareSourcesText(sources: SourceFile[], maxTotalChars: number = 30000
 }
 
 export async function mixNotes(sources: SourceFile[], instruction: string, playbooks: SourceFile[] = []): Promise<Idea[]> {
-  const apiKey = getApiKey();
-  if (!apiKey || apiKey === "YOUR_GROQ_API_KEY") {
-    throw new Error("A chave da API Groq não está configurada. Verifique suas variáveis de ambiente (VITE_GROQ).");
+  if (!apiKey || apiKey === "YOUR_GEMINI_API_KEY") {
+    throw new Error("A chave da API Gemini não está configurada. Verifique suas variáveis de ambiente (GEMINI_API_KEY ou VITE_GEMINI_API_KEY).");
   }
 
-  // Calculate dynamic limits to stay within token limits (approx 12k TPM)
-  // We aim for ~30k chars total for context to be safe (~7.5k tokens)
+  // Calculate dynamic limits to stay within token limits
   const TOTAL_CONTEXT_CHARS = 30000;
   const playbooksChars = playbooks.length > 0 ? Math.min(10000, Math.floor(TOTAL_CONTEXT_CHARS * 0.3)) : 0;
   const sourcesChars = TOTAL_CONTEXT_CHARS - playbooksChars;
@@ -116,46 +120,43 @@ export async function mixNotes(sources: SourceFile[], instruction: string, playb
     Gere de 5 a 10 ideias distintas. Para cada ideia, você DEVE combinar elementos de 2 ou mais fontes diferentes (varie a quantidade, às vezes combine 2, às vezes todas).
     ${playbooks.length > 0 ? "Certifique-se de que cada ideia esteja alinhada com os Playbooks fornecidos." : ""}
     
-    Retorne APENAS um objeto JSON com a seguinte estrutura exata:
-    {
-      "ideas": [
-        {
-          "title": "Título cativante da ideia",
-          "description": "Descrição detalhada de como a ideia funciona e como ela conecta as fontes.",
-          "benefits": ["Benefício 1", "Benefício 2"],
-          "applications": ["Aplicação 1", "Aplicação 2"],
-          "sourcesCombined": ["Nome da Fonte 1", "Nome da Fonte 2"]
-        }
-      ]
-    }
-    
-    IMPORTANTE: TODO O TEXTO DEVE ESTAR EM PORTUGUÊS (PT-BR). RETORNE APENAS O JSON VÁLIDO.
+    IMPORTANTE: TODO O TEXTO DEVE ESTAR EM PORTUGUÊS (PT-BR).
   `;
 
+  const responseSchema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      ideas: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            title: { type: Type.STRING, description: "Título cativante da ideia" },
+            description: { type: Type.STRING, description: "Descrição detalhada de como a ideia funciona e como ela conecta as fontes." },
+            benefits: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Lista de benefícios" },
+            applications: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Lista de aplicações práticas" },
+            sourcesCombined: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Nomes das fontes combinadas" }
+          },
+          required: ["title", "description", "benefits", "applications", "sourcesCombined"]
+        }
+      }
+    },
+    required: ["ideas"]
+  };
+
   try {
-    const chatCompletion = await groq.chat.completions.create({
-      messages: [
-        { role: "system", content: "Você é um assistente criativo que retorna apenas JSON válido." },
-        { role: "user", content: prompt }
-      ],
-      model: "llama-3.3-70b-versatile",
-      temperature: 0.8,
-      response_format: { type: "json_object" },
+    const response = await ai.models.generateContent({
+      model: "gemini-3.1-pro-preview",
+      contents: prompt,
+      config: {
+        temperature: 0.8,
+        responseMimeType: "application/json",
+        responseSchema: responseSchema,
+      }
     });
 
-    const content = chatCompletion.choices[0]?.message?.content || '{"ideas":[]}';
-    
-    // Clean up potential markdown formatting
-    const jsonStr = content.replace(/```json\n?|```/g, "").trim();
-    
-    let parsed;
-    try {
-      parsed = JSON.parse(jsonStr);
-    } catch (e) {
-      console.error("Failed to parse JSON:", jsonStr);
-      throw new Error("Invalid JSON response from AI");
-    }
-    
+    const jsonStr = response.text || '{"ideas":[]}';
+    const parsed = JSON.parse(jsonStr);
     return parsed.ideas as Idea[];
   } catch (e) {
     console.error("Error in mixNotes:", e);
@@ -174,47 +175,44 @@ export async function extractConcepts(source: SourceFile): Promise<ExtractedConc
     Fonte:
     ${sourceText}
     
-    Retorne APENAS um objeto JSON com a seguinte estrutura exata:
-    {
-      "concepts": [
-        {
-          "concept": "Nome do conceito ou palavra-chave",
-          "explanation": "Explicação clara e concisa do conceito no contexto da fonte.",
-          "type": "substantivo | verbo | frase_inovadora | ideia_central",
-          "synonyms": ["Sinônimo 1", "Sinônimo 2"],
-          "randomAssociations": ["Associação inusitada 1", "Associação inusitada 2"],
-          "usageExamples": ["Exemplo de uso 1", "Exemplo de uso 2"]
-        }
-      ]
-    }
-    
-    IMPORTANTE: TODO O TEXTO DEVE ESTAR EM PORTUGUÊS (PT-BR). RETORNE APENAS O JSON VÁLIDO.
+    IMPORTANTE: TODO O TEXTO DEVE ESTAR EM PORTUGUÊS (PT-BR).
   `;
 
+  const responseSchema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      concepts: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            concept: { type: Type.STRING, description: "Nome do conceito ou palavra-chave" },
+            explanation: { type: Type.STRING, description: "Explicação clara e concisa" },
+            type: { type: Type.STRING, description: "Tipo (substantivo, verbo, etc)" },
+            synonyms: { type: Type.ARRAY, items: { type: Type.STRING } },
+            randomAssociations: { type: Type.ARRAY, items: { type: Type.STRING } },
+            usageExamples: { type: Type.ARRAY, items: { type: Type.STRING } }
+          },
+          required: ["concept", "explanation", "type"]
+        }
+      }
+    },
+    required: ["concepts"]
+  };
+
   try {
-    const chatCompletion = await groq.chat.completions.create({
-      messages: [
-        { role: "system", content: "Você é um analista de dados que retorna apenas JSON válido." },
-        { role: "user", content: prompt }
-      ],
-      model: "llama-3.3-70b-versatile",
-      temperature: 0.5,
-      response_format: { type: "json_object" },
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: prompt,
+      config: {
+        temperature: 0.5,
+        responseMimeType: "application/json",
+        responseSchema: responseSchema,
+      }
     });
 
-    const content = chatCompletion.choices[0]?.message?.content || '{"concepts":[]}';
-    
-    // Clean up potential markdown formatting
-    const jsonStr = content.replace(/```json\n?|```/g, "").trim();
-    
-    let parsed;
-    try {
-      parsed = JSON.parse(jsonStr);
-    } catch (e) {
-      console.error("Failed to parse JSON in extractConcepts:", jsonStr);
-      throw new Error("Invalid JSON response from AI");
-    }
-
+    const jsonStr = response.text || '{"concepts":[]}';
+    const parsed = JSON.parse(jsonStr);
     return parsed.concepts as ExtractedConcept[];
   } catch (e) {
     console.error("Error in extractConcepts:", e);
@@ -239,40 +237,35 @@ export async function expandIdea(idea: Idea, additionalSources: SourceFile[], in
     Instruções Adicionais do Usuário:
     ${instruction || "Expanda a ideia de forma criativa e detalhada."}
     
-    Retorne APENAS um objeto JSON com a seguinte estrutura exata representando a ideia expandida:
-    {
-      "title": "Título da ideia (pode ser o mesmo ou evoluído)",
-      "description": "Descrição expandida, detalhada e narrativa da ideia.",
-      "benefits": ["Benefício 1", "Benefício 2"],
-      "applications": ["Aplicação 1", "Aplicação 2"],
-      "sourcesCombined": ["Fonte Original", "Nova Fonte 1"]
-    }
-    
-    IMPORTANTE: TODO O TEXTO DEVE ESTAR EM PORTUGUÊS (PT-BR). RETORNE APENAS O JSON VÁLIDO.
+    IMPORTANTE: TODO O TEXTO DEVE ESTAR EM PORTUGUÊS (PT-BR).
   `;
 
+  const responseSchema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      title: { type: Type.STRING },
+      description: { type: Type.STRING },
+      benefits: { type: Type.ARRAY, items: { type: Type.STRING } },
+      applications: { type: Type.ARRAY, items: { type: Type.STRING } },
+      sourcesCombined: { type: Type.ARRAY, items: { type: Type.STRING } }
+    },
+    required: ["title", "description", "benefits", "applications", "sourcesCombined"]
+  };
+
   try {
-    const chatCompletion = await groq.chat.completions.create({
-      messages: [
-        { role: "system", content: "Você é um assistente criativo que retorna apenas JSON válido." },
-        { role: "user", content: prompt }
-      ],
-      model: "llama-3.3-70b-versatile",
-      temperature: 0.7,
-      response_format: { type: "json_object" },
+    const response = await ai.models.generateContent({
+      model: "gemini-3.1-pro-preview",
+      contents: prompt,
+      config: {
+        temperature: 0.7,
+        responseMimeType: "application/json",
+        responseSchema: responseSchema,
+      }
     });
 
-    const content = chatCompletion.choices[0]?.message?.content || '{}';
-    
-    // Clean up potential markdown formatting
-    const jsonStr = content.replace(/```json\n?|```/g, "").trim();
-    
-    try {
-      return JSON.parse(jsonStr) as Idea;
-    } catch (e) {
-      console.error("Failed to parse JSON in expandIdea:", jsonStr);
-      throw new Error("Invalid JSON response from AI");
-    }
+    const jsonStr = response.text || '{}';
+    const parsed = JSON.parse(jsonStr);
+    return parsed as Idea;
   } catch (e) {
     console.error("Error in expandIdea:", e);
     throw e;
@@ -295,60 +288,43 @@ export async function predictIdea(idea: Idea): Promise<IdeaPrediction[]> {
     2. Pessimista (O pior caso possível, falhas, perda de tempo)
     3. Realista (O que provavelmente vai acontecer)
     
-    Retorne APENAS um objeto JSON com a seguinte estrutura exata:
-    {
-      "predictions": [
-        {
-          "scenarioType": "otimista",
-          "title": "Título do cenário",
-          "description": "Descrição detalhada de como a ideia se desenrola nesse cenário",
-          "probability": "Ex: 20%, Alta, Baixa",
-          "worthIt": true
-        },
-        {
-          "scenarioType": "pessimista",
-          "title": "Título do cenário",
-          "description": "Descrição detalhada de como a ideia se desenrola nesse cenário",
-          "probability": "Ex: 20%, Alta, Baixa",
-          "worthIt": false
-        },
-        {
-          "scenarioType": "realista",
-          "title": "Título do cenário",
-          "description": "Descrição detalhada de como a ideia se desenrola nesse cenário",
-          "probability": "Ex: 20%, Alta, Baixa",
-          "worthIt": true
-        }
-      ]
-    }
-    
-    IMPORTANTE: TODO O TEXTO DEVE ESTAR EM PORTUGUÊS (PT-BR). RETORNE APENAS O JSON VÁLIDO.
+    IMPORTANTE: TODO O TEXTO DEVE ESTAR EM PORTUGUÊS (PT-BR).
   `;
 
+  const responseSchema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      predictions: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            scenarioType: { type: Type.STRING, enum: ["otimista", "pessimista", "realista"] },
+            title: { type: Type.STRING },
+            description: { type: Type.STRING },
+            probability: { type: Type.STRING },
+            worthIt: { type: Type.BOOLEAN }
+          },
+          required: ["scenarioType", "title", "description", "probability", "worthIt"]
+        }
+      }
+    },
+    required: ["predictions"]
+  };
+
   try {
-    const chatCompletion = await groq.chat.completions.create({
-      messages: [
-        { role: "system", content: "Você é um analista de cenários que retorna apenas JSON válido." },
-        { role: "user", content: prompt }
-      ],
-      model: "llama-3.3-70b-versatile",
-      temperature: 0.7,
-      response_format: { type: "json_object" },
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: prompt,
+      config: {
+        temperature: 0.7,
+        responseMimeType: "application/json",
+        responseSchema: responseSchema,
+      }
     });
 
-    const content = chatCompletion.choices[0]?.message?.content || '{"predictions":[]}';
-    
-    // Clean up potential markdown formatting
-    const jsonStr = content.replace(/```json\n?|```/g, "").trim();
-    
-    let parsed;
-    try {
-      parsed = JSON.parse(jsonStr);
-    } catch (e) {
-      console.error("Failed to parse JSON in predictIdea:", jsonStr);
-      throw new Error("Invalid JSON response from AI");
-    }
-
+    const jsonStr = response.text || '{"predictions":[]}';
+    const parsed = JSON.parse(jsonStr);
     return parsed.predictions as IdeaPrediction[];
   } catch (e) {
     console.error("Error in predictIdea:", e);
