@@ -13,13 +13,18 @@ const getApiKey = () => {
       return process.env.GEMINI_API_KEY;
     }
     // Fallback to Vite env var
-    return import.meta.env.VITE_GEMINI_API_KEY;
+    if (import.meta.env.VITE_GEMINI_API_KEY) {
+      return import.meta.env.VITE_GEMINI_API_KEY;
+    }
+    // Fallback to user-provided key
+    return "AIzaSyAJh0z7GtGHaj5Tsibd_LgZFNC4Sov8cNM";
   } catch (e) {
-    return "";
+    return "AIzaSyAJh0z7GtGHaj5Tsibd_LgZFNC4Sov8cNM";
   }
 };
 
 const apiKey = getApiKey();
+// Only use the placeholder if we really don't have a key
 const ai = new GoogleGenAI({ apiKey: apiKey || "YOUR_GEMINI_API_KEY" });
 
 export interface IdeaPrediction {
